@@ -53,6 +53,10 @@ namespace NavalBattle.Messages
         public int BoardSize;
         /// <summary>Flat row-major marks for own board (Empty/Ship).</summary>
         public byte[] YourCells;
+        public float TurnSecondsRemaining;
+        public float TurnTimeoutSeconds;
+        /// <summary>Absolute Time.realtimeSinceStartup when the turn ends (same process clock).</summary>
+        public float TurnEndsAtRealtime;
     }
 
     [Serializable]
@@ -75,6 +79,9 @@ namespace NavalBattle.Messages
         public byte NextTurnPlayerId;
         public bool GameOver;
         public byte WinnerPlayerId;
+        public float TurnSecondsRemaining;
+        public float TurnTimeoutSeconds;
+        public float TurnEndsAtRealtime;
     }
 
     [Serializable]
@@ -92,6 +99,21 @@ namespace NavalBattle.Messages
         public string PendingRequestId;
         public int PendingX;
         public int PendingY;
+        public float TurnSecondsRemaining;
+        public float TurnTimeoutSeconds;
+        public float TurnEndsAtRealtime;
+    }
+
+    [Serializable]
+    public class TurnUpdateMessage
+    {
+        public byte CurrentTurnPlayerId;
+        public bool TimedOut;
+        public byte TimedOutPlayerId;
+        public float TurnSecondsRemaining;
+        public float TurnTimeoutSeconds;
+        public float TurnEndsAtRealtime;
+        public string Reason;
     }
 
     [Serializable]

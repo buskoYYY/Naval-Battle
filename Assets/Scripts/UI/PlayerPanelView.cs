@@ -116,7 +116,12 @@ namespace NavalBattle.UI
                 if (_peer.DropNextOutgoing > 0 || _peer.DropNextIncoming > 0)
                     drops = $"  |  drop↑{_peer.DropNextOutgoing} ↓{_peer.DropNextIncoming}";
 
-                _status.text = _client.StatusText + pending + drops;
+                var timer = string.Empty;
+                if (_client.TurnTimeoutSeconds > 0f &&
+                    (_client.Phase == MatchPhase.Playing || _client.Phase == MatchPhase.PausedDisconnected))
+                    timer = $"  |  ⏱ {_client.TurnSecondsRemaining:0.0}s";
+
+                _status.text = _client.StatusText + timer + pending + drops;
             }
 
             UpdateLatencyLabel(_peer.LatencyMs);

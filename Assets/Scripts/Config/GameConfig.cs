@@ -27,9 +27,9 @@ namespace NavalBattle.Config
         [Min(0f)]
         public float DisconnectForfeitSeconds = 0f;
 
-        [Tooltip("Optional turn timer in seconds. 0 = disabled.")]
+        [Tooltip("Optional turn timer in seconds. 0 = disabled. On timeout the turn passes without a shot.")]
         [Min(0f)]
-        public float TurnTimeoutSeconds = 0f;
+        public float TurnTimeoutSeconds = 30f;
 
         [Tooltip("0 = random first player, 1 = Player1, 2 = Player2. Useful for tests.")]
         [Range(0, 2)]

@@ -22,6 +22,7 @@ namespace NavalBattle.Tests
             _config.ForbidOrthogonalTouch = true;
             _config.DefaultLatencyMs = 0f;
             _config.FirstTurnPlayerId = 1; // Player1 starts — deterministic for assertions
+            _config.TurnTimeoutSeconds = 0f; // disabled unless a test enables it
 
             _transport = new FakeTransportHub();
             _server = new GameServer(_config, _transport);
@@ -218,6 +219,35 @@ namespace NavalBattle.Tests
                 Assert.AreNotEqual((byte)CellMark.Ship, mark,
                     "Fog must not contain opponent ship marks");
             }
+        }
+
+        [Test]
+        public void TurnTimeout_PassesTurnWithoutShot()
+        {
+            _config.TurnTimeoutSeconds = 5f;
+            _server.Tick(100f);
+            JoinBoth();
+
+            var started = _transport.LastPayloadTo<MatchStartedMessage>("c1", MessageType.MatchStarted);
+            Assert.AreEqual((byte)PlayerId.Player1, started.CurrentTurnPlayerId);
+            Assert.Greater(started.TurnSecondsRemaining, 0f);
+
+            _server.Tick(105.1f);
+
+            Assert.Greater(_transport.CountTo("c1", MessageType.TurnUpdate), 0);
+            var update = _transport.LastPayloadTo<TurnUpdateMessage>("c1", MessageType.TurnUpdate);
+            Assert.IsTrue(update.TimedOut);
+            Assert.AreEqual((byte)PlayerId.Player1, update.TimedOutPlayerId);
+            Assert.AreEqual((byte)PlayerId.Player2, update.CurrentTurnPlayerId);
+
+            // After timeout, Player2 can fire.
+            _transport.DeliverFromClient("c2", MessageType.FireRequest, new FireRequest
+            {
+                RequestId = "after-timeout",
+                X = 0,
+                Y = 0
+            });
+            Assert.Greater(_transport.CountTo("c2", MessageType.ShotResult), 0);
         }
 
         private void JoinBoth()

@@ -16,6 +16,7 @@ namespace NavalBattle.Messages
         StateSnapshot = 54,
         OpponentConnectionChanged = 55,
         MatchFinished = 56,
-        Error = 57
+        Error = 57,
+        TurnUpdate = 58
     }
 }

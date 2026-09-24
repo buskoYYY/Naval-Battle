@@ -82,6 +82,7 @@ namespace NavalBattle.Bootstrap
         {
             var now = Time.realtimeSinceStartup;
             _transport?.Tick(now);
+            _server?.Tick(now);
             _client1?.Tick(now);
             _client2?.Tick(now);
         }

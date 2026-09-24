@@ -30,12 +30,36 @@ namespace NavalBattle.Server
         private PlayerId _currentTurn = PlayerId.None;
         private PlayerId _winner = PlayerId.None;
         private bool _alive = true;
+        private float _lastTickNow = -1f;
+        private float _turnEndsAt = float.PositiveInfinity;
+        private float _pausedTurnRemaining = -1f;
+
+        private float Now => _lastTickNow >= 0f ? _lastTickNow : Time.realtimeSinceStartup;
 
         public GameServer(GameConfig config, ITransportHub transport)
         {
             _config = config;
             _transport = transport;
             _transport.BindServerHandler(OnClientMessage);
+        }
+
+        public void Tick(float nowSeconds)
+        {
+            if (!_alive)
+                return;
+
+            _lastTickNow = nowSeconds;
+
+            if (_phase != MatchPhase.Playing)
+                return;
+
+            if (_config.TurnTimeoutSeconds <= 0f)
+                return;
+
+            if (nowSeconds < _turnEndsAt)
+                return;
+
+            PassTurnDueToTimeout();
         }
 
         public void Shutdown()
@@ -55,7 +79,13 @@ namespace NavalBattle.Server
             binding.PendingCell = null;
 
             if (_phase == MatchPhase.Playing)
+            {
+                if (_config.TurnTimeoutSeconds > 0f && !float.IsPositiveInfinity(_turnEndsAt))
+                    _pausedTurnRemaining = Mathf.Max(0f, _turnEndsAt - Now);
+
                 _phase = MatchPhase.PausedDisconnected;
+                BroadcastTurnClock("Timer paused (disconnect)");
+            }
 
             NotifyOpponentConnection(binding.PlayerId, false);
         }
@@ -68,7 +98,16 @@ namespace NavalBattle.Server
             binding.Connected = true;
 
             if (_phase == MatchPhase.PausedDisconnected && AllPlayersConnected())
+            {
                 _phase = MatchPhase.Playing;
+                if (_config.TurnTimeoutSeconds > 0f && _pausedTurnRemaining >= 0f)
+                {
+                    _turnEndsAt = Now + _pausedTurnRemaining;
+                    _pausedTurnRemaining = -1f;
+                }
+
+                BroadcastTurnClock("Timer resumed (reconnect)");
+            }
 
             NotifyOpponentConnection(binding.PlayerId, true);
             SendSnapshot(binding);
@@ -157,7 +196,16 @@ namespace NavalBattle.Server
             _byPeer[peerId] = binding;
 
             if (_phase == MatchPhase.PausedDisconnected && AllPlayersConnected())
+            {
                 _phase = MatchPhase.Playing;
+                if (_config.TurnTimeoutSeconds > 0f && _pausedTurnRemaining >= 0f)
+                {
+                    _turnEndsAt = Now + _pausedTurnRemaining;
+                    _pausedTurnRemaining = -1f;
+                }
+
+                BroadcastTurnClock("Timer resumed (reconnect)");
+            }
 
             NotifyOpponentConnection(playerId, true);
             SendSnapshot(binding);
@@ -245,6 +293,8 @@ namespace NavalBattle.Server
                 _phase = AllPlayersConnected()
                     ? MatchPhase.Playing
                     : MatchPhase.PausedDisconnected;
+                if (_phase == MatchPhase.Playing)
+                    RestartTurnClock();
             }
 
             var result = new ShotResultMessage
@@ -258,7 +308,10 @@ namespace NavalBattle.Server
                 SunkCellsY = sunkCells != null ? sunkCells.ConvertAll(c => c.Y).ToArray() : Array.Empty<int>(),
                 NextTurnPlayerId = (byte)_currentTurn,
                 GameOver = gameOver,
-                WinnerPlayerId = (byte)_winner
+                WinnerPlayerId = (byte)_winner,
+                TurnSecondsRemaining = GetTurnSecondsRemaining(),
+                TurnTimeoutSeconds = _config.TurnTimeoutSeconds,
+                TurnEndsAtRealtime = GetTurnEndsAtRealtime()
             };
 
             shooter.ProcessedShots[request.RequestId] = result;
@@ -285,6 +338,8 @@ namespace NavalBattle.Server
             _currentTurn = ResolveFirstTurn();
             _phase = MatchPhase.Playing;
             _winner = PlayerId.None;
+            _pausedTurnRemaining = -1f;
+            RestartTurnClock();
 
             foreach (var binding in _byPlayer.Values)
             {
@@ -293,9 +348,101 @@ namespace NavalBattle.Server
                     YourPlayerId = (byte)binding.PlayerId,
                     CurrentTurnPlayerId = (byte)_currentTurn,
                     BoardSize = _config.BoardSize,
-                    YourCells = binding.Board.ToOwnCellMarks()
+                    YourCells = binding.Board.ToOwnCellMarks(),
+                    TurnSecondsRemaining = GetTurnSecondsRemaining(),
+                    TurnTimeoutSeconds = _config.TurnTimeoutSeconds,
+                    TurnEndsAtRealtime = GetTurnEndsAtRealtime()
                 });
             }
+        }
+
+        private void PassTurnDueToTimeout()
+        {
+            if (_phase != MatchPhase.Playing || _currentTurn == PlayerId.None)
+                return;
+
+            var timedOutPlayer = _currentTurn;
+            if (_byPlayer.TryGetValue(timedOutPlayer, out var binding))
+            {
+                binding.PendingRequestId = null;
+                binding.PendingCell = null;
+            }
+
+            var opponent = OpponentOf(timedOutPlayer);
+            if (opponent == null)
+                return;
+
+            _currentTurn = opponent.PlayerId;
+            RestartTurnClock();
+
+            Broadcast(MessageType.TurnUpdate, new TurnUpdateMessage
+            {
+                CurrentTurnPlayerId = (byte)_currentTurn,
+                TimedOut = true,
+                TimedOutPlayerId = (byte)timedOutPlayer,
+                TurnSecondsRemaining = GetTurnSecondsRemaining(),
+                TurnTimeoutSeconds = _config.TurnTimeoutSeconds,
+                TurnEndsAtRealtime = GetTurnEndsAtRealtime(),
+                Reason = "Turn timeout"
+            });
+        }
+
+        private void RestartTurnClock()
+        {
+            if (_config.TurnTimeoutSeconds <= 0f)
+            {
+                _turnEndsAt = float.PositiveInfinity;
+                return;
+            }
+
+            _turnEndsAt = Now + _config.TurnTimeoutSeconds;
+        }
+
+        private void BroadcastTurnClock(string reason)
+        {
+            if (_config.TurnTimeoutSeconds <= 0f)
+                return;
+
+            Broadcast(MessageType.TurnUpdate, new TurnUpdateMessage
+            {
+                CurrentTurnPlayerId = (byte)_currentTurn,
+                TimedOut = false,
+                TimedOutPlayerId = 0,
+                TurnSecondsRemaining = GetTurnSecondsRemaining(),
+                TurnTimeoutSeconds = _config.TurnTimeoutSeconds,
+                TurnEndsAtRealtime = GetTurnEndsAtRealtime(),
+                Reason = reason
+            });
+        }
+
+        private float GetTurnSecondsRemaining()
+        {
+            if (_config.TurnTimeoutSeconds <= 0f)
+                return 0f;
+
+            if (_phase == MatchPhase.PausedDisconnected && _pausedTurnRemaining >= 0f)
+                return _pausedTurnRemaining;
+
+            if (float.IsPositiveInfinity(_turnEndsAt))
+                return 0f;
+
+            return Mathf.Max(0f, _turnEndsAt - Now);
+        }
+
+        private float GetTurnEndsAtRealtime()
+        {
+            if (_config.TurnTimeoutSeconds <= 0f)
+                return -1f;
+
+            // While paused, clients must freeze on TurnSecondsRemaining (absolute
+            // deadline would look wrong after receive delay).
+            if (_phase == MatchPhase.PausedDisconnected)
+                return -1f;
+
+            if (float.IsPositiveInfinity(_turnEndsAt))
+                return -1f;
+
+            return _turnEndsAt;
         }
 
         private void SendSnapshot(PlayerBinding binding)
@@ -318,7 +465,10 @@ namespace NavalBattle.Server
                 HasPendingShot = !string.IsNullOrEmpty(binding.PendingRequestId),
                 PendingRequestId = binding.PendingRequestId ?? string.Empty,
                 PendingX = binding.PendingCell?.X ?? -1,
-                PendingY = binding.PendingCell?.Y ?? -1
+                PendingY = binding.PendingCell?.Y ?? -1,
+                TurnSecondsRemaining = GetTurnSecondsRemaining(),
+                TurnTimeoutSeconds = _config.TurnTimeoutSeconds,
+                TurnEndsAtRealtime = GetTurnEndsAtRealtime()
             };
 
             Send(binding.PeerId, MessageType.StateSnapshot, snapshot);

@@ -125,7 +125,12 @@ namespace NavalBattle.Client
         public bool HasPendingShot { get; private set; }
         public string PendingRequestId { get; private set; }
         public int RetryCount => _retryCount;
+        public float TurnSecondsRemaining { get; private set; }
+        public float TurnTimeoutSeconds { get; private set; }
         public ClientBoardView BoardView { get; } = new();
+
+        private float _turnDeadlineRealtime = -1f;
+        private float _lastDisplayedTurnSeconds = -1f;
 
         public event Action StateChanged;
         public event Action<string> MessageLogged;
@@ -173,6 +178,8 @@ namespace NavalBattle.Client
 
         public void Tick(float nowSeconds)
         {
+            UpdateLocalTurnCountdown(nowSeconds);
+
             if (!_alive || !HasPendingShot || !_peer.IsConnected)
                 return;
 
@@ -193,6 +200,56 @@ namespace NavalBattle.Client
                 X = _pendingX,
                 Y = _pendingY
             });
+        }
+
+        private void UpdateLocalTurnCountdown(float nowSeconds)
+        {
+            // While paused, keep the frozen remaining value from the last server sync.
+            if (TurnTimeoutSeconds <= 0f || _turnDeadlineRealtime < 0f || Phase != MatchPhase.Playing)
+                return;
+
+            var remaining = Mathf.Max(0f, _turnDeadlineRealtime - nowSeconds);
+            TurnSecondsRemaining = remaining;
+
+            if (Mathf.Abs(remaining - _lastDisplayedTurnSeconds) >= 0.1f || remaining <= 0f)
+            {
+                _lastDisplayedTurnSeconds = remaining;
+                RaiseState();
+            }
+        }
+
+        private void ApplyTurnTimer(float secondsRemaining, float timeoutSeconds, float endsAtRealtime = -1f)
+        {
+            TurnTimeoutSeconds = timeoutSeconds;
+
+            if (timeoutSeconds <= 0f)
+            {
+                TurnSecondsRemaining = 0f;
+                _turnDeadlineRealtime = -1f;
+                _lastDisplayedTurnSeconds = 0f;
+                return;
+            }
+
+            // Absolute deadline (shared process clock) — immune to receive delay.
+            if (endsAtRealtime > 0f)
+            {
+                _turnDeadlineRealtime = endsAtRealtime;
+                TurnSecondsRemaining = Mathf.Max(0f, endsAtRealtime - Time.realtimeSinceStartup);
+            }
+            // Explicit freeze (pause): keep remaining, do not start a local countdown.
+            else if (endsAtRealtime < 0f)
+            {
+                TurnSecondsRemaining = Mathf.Max(0f, secondsRemaining);
+                _turnDeadlineRealtime = -1f;
+            }
+            else
+            {
+                // endsAtRealtime == 0: legacy fallback
+                TurnSecondsRemaining = Mathf.Max(0f, secondsRemaining);
+                _turnDeadlineRealtime = Time.realtimeSinceStartup + TurnSecondsRemaining;
+            }
+
+            _lastDisplayedTurnSeconds = TurnSecondsRemaining;
         }
 
         public bool TryFire(int x, int y)
@@ -274,7 +331,8 @@ namespace NavalBattle.Client
                 or MessageType.MatchFinished
                 or MessageType.MatchStarted
                 or MessageType.StateSnapshot
-                or MessageType.FireRejected)
+                or MessageType.FireRejected
+                or MessageType.TurnUpdate)
             {
                 RequestSync();
             }
@@ -296,7 +354,13 @@ namespace NavalBattle.Client
                 return;
 
             ClearPendingLocal();
-            StatusText = "Disconnected";
+
+            if (Phase == MatchPhase.Playing)
+                Phase = MatchPhase.PausedDisconnected;
+
+            // Stop local countdown; remaining value stays frozen until snapshot/TurnUpdate.
+            _turnDeadlineRealtime = -1f;
+            StatusText = "Disconnected (timer paused)";
             RaiseState();
         }
 
@@ -330,6 +394,9 @@ namespace NavalBattle.Client
                 case MessageType.MatchFinished:
                     HandleFinished(MessageSerializer.Unwrap<MatchFinishedMessage>(envelope));
                     break;
+                case MessageType.TurnUpdate:
+                    HandleTurnUpdate(MessageSerializer.Unwrap<TurnUpdateMessage>(envelope));
+                    break;
                 case MessageType.Error:
                     StatusText = MessageSerializer.Unwrap<ErrorMessage>(envelope).Text;
                     RaiseState();
@@ -353,7 +420,8 @@ namespace NavalBattle.Client
             BoardView.Reset(msg.BoardSize);
             BoardView.ApplyOwnMarks(msg.YourCells);
             ClearPendingLocal();
-            StatusText = CurrentTurn == PlayerId ? "Your turn" : $"Opponent turn (wait {CurrentTurn})";
+            ApplyTurnTimer(msg.TurnSecondsRemaining, msg.TurnTimeoutSeconds, msg.TurnEndsAtRealtime);
+            StatusText = FormatTurnStatus();
             RaiseState();
         }
 
@@ -382,6 +450,7 @@ namespace NavalBattle.Client
             }
 
             CurrentTurn = (PlayerId)msg.NextTurnPlayerId;
+            ApplyTurnTimer(msg.TurnSecondsRemaining, msg.TurnTimeoutSeconds, msg.TurnEndsAtRealtime);
             if (msg.GameOver)
             {
                 Phase = MatchPhase.Finished;
@@ -390,7 +459,7 @@ namespace NavalBattle.Client
             }
             else
             {
-                StatusText = CurrentTurn == PlayerId ? "Your turn" : $"Opponent turn (wait {CurrentTurn})";
+                StatusText = FormatTurnStatus();
             }
 
             RaiseState();
@@ -405,6 +474,7 @@ namespace NavalBattle.Client
             BoardView.Reset(msg.BoardSize);
             BoardView.ApplyOwnMarks(msg.YourCells);
             BoardView.ApplyFogMarks(msg.OpponentFogCells);
+            ApplyTurnTimer(msg.TurnSecondsRemaining, msg.TurnTimeoutSeconds, msg.TurnEndsAtRealtime);
 
             if (msg.HasPendingShot)
             {
@@ -425,10 +495,39 @@ namespace NavalBattle.Client
             {
                 MatchPhase.Finished => Winner == PlayerId ? "You win!" : "You lose",
                 MatchPhase.PausedDisconnected => "Paused: waiting reconnect",
-                MatchPhase.Playing when CurrentTurn == PlayerId => "Your turn",
-                MatchPhase.Playing => $"Opponent turn (wait {CurrentTurn})",
+                MatchPhase.Playing => FormatTurnStatus(),
                 _ => "Waiting..."
             };
+            RaiseState();
+        }
+
+        private void HandleTurnUpdate(TurnUpdateMessage msg)
+        {
+            CurrentTurn = (PlayerId)msg.CurrentTurnPlayerId;
+            ApplyTurnTimer(msg.TurnSecondsRemaining, msg.TurnTimeoutSeconds, msg.TurnEndsAtRealtime);
+
+            if (msg.TimedOut)
+            {
+                var who = (PlayerId)msg.TimedOutPlayerId;
+                StatusText = who == PlayerId
+                    ? $"Your turn timed out → {CurrentTurn}"
+                    : $"{who} timed out → {FormatTurnStatus()}";
+            }
+            else if (!string.IsNullOrEmpty(msg.Reason) && msg.Reason.IndexOf("paused", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                Phase = MatchPhase.PausedDisconnected;
+                StatusText = $"{FormatTurnStatus()} (timer paused)";
+            }
+            else if (!string.IsNullOrEmpty(msg.Reason) && msg.Reason.IndexOf("resumed", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                Phase = MatchPhase.Playing;
+                StatusText = FormatTurnStatus();
+            }
+            else
+            {
+                StatusText = FormatTurnStatus();
+            }
+
             RaiseState();
         }
 
@@ -439,9 +538,10 @@ namespace NavalBattle.Client
             if (msg.IsConnected && Phase == MatchPhase.PausedDisconnected)
                 Phase = MatchPhase.Playing;
 
+            // Timer value is synced via TurnUpdate; keep phase/status in sync here.
             StatusText = msg.IsConnected
-                ? (CurrentTurn == PlayerId ? "Your turn" : $"Opponent turn (wait {CurrentTurn})")
-                : "Opponent disconnected";
+                ? FormatTurnStatus()
+                : "Opponent disconnected (timer paused)";
             RaiseState();
         }
 
@@ -451,6 +551,13 @@ namespace NavalBattle.Client
             Winner = (PlayerId)msg.WinnerPlayerId;
             StatusText = Winner == PlayerId ? "You win!" : "You lose";
             RaiseState();
+        }
+
+        private string FormatTurnStatus()
+        {
+            if (CurrentTurn == PlayerId)
+                return "Your turn";
+            return $"Opponent turn (wait {CurrentTurn})";
         }
 
         private void ClearPendingLocal()
