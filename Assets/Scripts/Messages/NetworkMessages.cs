@@ -1,5 +1,4 @@
 using System;
-using NavalBattle.Shared;
 
 namespace NavalBattle.Messages
 {

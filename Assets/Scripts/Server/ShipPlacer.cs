@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using NavalBattle.Config;
 using NavalBattle.Shared;
-using UnityEngine;
 
 namespace NavalBattle.Server
 {

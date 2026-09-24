@@ -8,114 +8,115 @@ namespace NavalBattle.UI
 {
     public sealed class BoardGridView : MonoBehaviour
     {
-        private CellMark[] _marks = Array.Empty<CellMark>();
+        [SerializeField] private GridLayoutGroup _grid;
+        [SerializeField] private Transform _root;
+
         private Button[] _buttons = Array.Empty<Button>();
+        private Text[] _labels = Array.Empty<Text>();
         private int _size;
         private bool _interactable;
         private Action<int, int> _onClick;
 
-        public void Build(Transform parent, int size, float cellSize, Action<int, int> onClick)
+        public int BuiltSize => _size;
+
+        public void Build(int size, Action<int, int> onClick)
         {
             _size = size;
             _onClick = onClick;
-            _buttons = new Button[size * size];
-            _marks = new CellMark[size * size];
+            Clear();
 
-            var gridGo = new GameObject("Grid", typeof(RectTransform), typeof(GridLayoutGroup));
-            gridGo.transform.SetParent(parent, false);
-            var grid = gridGo.GetComponent<GridLayoutGroup>();
-            grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-            grid.constraintCount = size;
-            grid.cellSize = new Vector2(cellSize, cellSize);
-            grid.spacing = new Vector2(2f, 2f);
+            if (_grid == null)
+                _grid = GetComponent<GridLayoutGroup>();
 
-            var rt = gridGo.GetComponent<RectTransform>();
-            rt.sizeDelta = new Vector2(size * (cellSize + 2f), size * (cellSize + 2f));
+            _grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            _grid.constraintCount = size;
+            _grid.cellSize = new Vector2(36, 36);
+            _grid.spacing = new Vector2(2, 2);
+
+            var count = size * size;
+            _buttons = new Button[count];
+            _labels = new Text[count];
 
             for (var y = 0; y < size; y++)
             for (var x = 0; x < size; x++)
             {
-                var cx = x;
-                var cy = y;
-                var btnGo = new GameObject($"Cell_{x}_{y}", typeof(RectTransform), typeof(Image), typeof(Button));
-                btnGo.transform.SetParent(gridGo.transform, false);
-                var image = btnGo.GetComponent<Image>();
-                image.color = ColorFor(CellMark.Unknown);
-                var button = btnGo.GetComponent<Button>();
-                button.onClick.AddListener(() => _onClick?.Invoke(cx, cy));
+                var index = y * size + x;
+                var go = new GameObject($"Cell_{x}_{y}", typeof(RectTransform), typeof(Image), typeof(Button));
+                go.transform.SetParent(_root != null ? _root : transform, false);
+
+                var image = go.GetComponent<Image>();
+                image.color = Color.white;
+
+                var button = go.GetComponent<Button>();
+                var capturedX = x;
+                var capturedY = y;
+                button.onClick.AddListener(() => _onClick?.Invoke(capturedX, capturedY));
 
                 var labelGo = new GameObject("Label", typeof(RectTransform), typeof(Text));
-                labelGo.transform.SetParent(btnGo.transform, false);
-                var text = labelGo.GetComponent<Text>();
-                text.alignment = TextAnchor.MiddleCenter;
-                text.color = Color.black;
-                text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-                text.fontSize = 12;
-                text.raycastTarget = false;
-                var labelRt = labelGo.GetComponent<RectTransform>();
+                labelGo.transform.SetParent(go.transform, false);
+                var label = labelGo.GetComponent<Text>();
+                label.alignment = TextAnchor.MiddleCenter;
+                label.color = Color.black;
+                label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                label.fontSize = 14;
+                label.text = string.Empty;
+                var labelRt = label.GetComponent<RectTransform>();
                 labelRt.anchorMin = Vector2.zero;
                 labelRt.anchorMax = Vector2.one;
                 labelRt.offsetMin = Vector2.zero;
                 labelRt.offsetMax = Vector2.zero;
 
-                _buttons[y * size + x] = button;
-                _marks[y * size + x] = CellMark.Unknown;
+                _buttons[index] = button;
+                _labels[index] = label;
             }
         }
 
-        public void SetInteractable(bool value)
+        public void SetInteractable(bool interactable)
         {
-            _interactable = value;
-            RefreshInteractable();
+            _interactable = interactable;
+            foreach (var button in _buttons)
+            {
+                if (button != null)
+                    button.interactable = interactable;
+            }
         }
 
-        public void Render(CellMark[] marks)
+        public void Render(CellMark[] marks, bool showShips)
         {
             if (marks == null || marks.Length != _buttons.Length)
                 return;
 
             for (var i = 0; i < marks.Length; i++)
             {
-                _marks[i] = marks[i];
-                var image = _buttons[i].GetComponent<Image>();
-                image.color = ColorFor(marks[i]);
-                var text = _buttons[i].GetComponentInChildren<Text>();
-                text.text = LabelFor(marks[i]);
-            }
+                var mark = marks[i];
+                var (text, color) = Describe(mark, showShips);
+                _labels[i].text = text;
+                _buttons[i].image.color = color;
 
-            RefreshInteractable();
+                var locked = mark is CellMark.Miss or CellMark.Hit or CellMark.Sunk or CellMark.Pending;
+                _buttons[i].interactable = _interactable && !locked;
+            }
         }
 
-        private void RefreshInteractable()
+        private static (string text, Color color) Describe(CellMark mark, bool showShips)
         {
-            for (var i = 0; i < _buttons.Length; i++)
+            return mark switch
             {
-                var mark = _marks[i];
-                var canClick = _interactable &&
-                               mark is CellMark.Unknown or CellMark.Empty;
-                _buttons[i].interactable = canClick;
-            }
+                CellMark.Ship when showShips => ("S", new Color(0.4f, 0.7f, 1f)),
+                CellMark.Miss => ("·", new Color(0.75f, 0.85f, 1f)),
+                CellMark.Hit => ("X", new Color(1f, 0.6f, 0.3f)),
+                CellMark.Sunk => ("#", new Color(1f, 0.25f, 0.25f)),
+                CellMark.Pending => ("?", new Color(1f, 1f, 0.4f)),
+                CellMark.Unknown => ("", Color.white),
+                _ => ("", new Color(0.92f, 0.92f, 0.95f))
+            };
         }
 
-        private static Color ColorFor(CellMark mark) => mark switch
+        private void Clear()
         {
-            CellMark.Ship => new Color(0.2f, 0.55f, 0.2f),
-            CellMark.Miss => new Color(0.55f, 0.7f, 0.9f),
-            CellMark.Hit => new Color(0.9f, 0.45f, 0.2f),
-            CellMark.Sunk => new Color(0.7f, 0.1f, 0.1f),
-            CellMark.Pending => new Color(0.95f, 0.9f, 0.3f),
-            CellMark.Empty => new Color(0.75f, 0.85f, 0.95f),
-            _ => new Color(0.85f, 0.85f, 0.85f)
-        };
-
-        private static string LabelFor(CellMark mark) => mark switch
-        {
-            CellMark.Ship => "S",
-            CellMark.Miss => "·",
-            CellMark.Hit => "X",
-            CellMark.Sunk => "#",
-            CellMark.Pending => "?",
-            _ => string.Empty
-        };
+            var parent = _root != null ? _root : transform;
+            for (var i = parent.childCount - 1; i >= 0; i--)
+                Destroy(parent.GetChild(i).gameObject);
+        }
     }
 }

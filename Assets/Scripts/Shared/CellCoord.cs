@@ -1,5 +1,4 @@
 using System;
-using UnityEngine;
 
 namespace NavalBattle.Shared
 {
@@ -19,7 +18,7 @@ namespace NavalBattle.Shared
 
         public override bool Equals(object obj) => obj is CellCoord other && Equals(other);
 
-        public override int GetHashCode() => HashCode.Combine(X, Y);
+        public override int GetHashCode() => (X * 397) ^ Y;
 
         public override string ToString() => $"({X},{Y})";
 
