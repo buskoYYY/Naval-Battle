@@ -35,6 +35,15 @@ namespace NavalBattle.Config
         [Range(0, 2)]
         public int FirstTurnPlayerId = 0;
 
+        [Header("Reliability")]
+        [Tooltip("If no FireAccepted/Result within this time, client resends the same requestId.")]
+        [Min(0.1f)]
+        public float FireRetryTimeoutSeconds = 1.0f;
+
+        [Tooltip("Max automatic resends of a pending fire request.")]
+        [Min(0)]
+        public int MaxFireRetries = 5;
+
         public void ValidateOrThrow()
         {
             if (BoardSize < 1)

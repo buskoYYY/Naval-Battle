@@ -33,6 +33,12 @@ namespace NavalBattle.Messages
     }
 
     [Serializable]
+    public class SyncRequest
+    {
+        public byte PlayerId;
+    }
+
+    [Serializable]
     public class WelcomeMessage
     {
         public byte PlayerId;

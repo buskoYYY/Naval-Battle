@@ -14,9 +14,21 @@ namespace NavalBattle.Transport
         /// </summary>
         float LatencyMs { get; set; }
 
+        /// <summary>Next N client→server messages from this peer are dropped.</summary>
+        int DropNextOutgoing { get; set; }
+
+        /// <summary>Next N server→client messages to this peer are dropped.</summary>
+        int DropNextIncoming { get; set; }
+
         event Action<NetworkEnvelope> MessageReceived;
         event Action Disconnected;
         event Action Connected;
+
+        /// <summary>
+        /// Fired when an S->C message was intentionally dropped (loss simulation).
+        /// Client should request a state snapshot to avoid turn desync.
+        /// </summary>
+        event Action<MessageType> IncomingMessageDropped;
 
         void Send(NetworkEnvelope envelope);
         void Disconnect();

@@ -107,7 +107,15 @@ namespace NavalBattle.Client
     {
         private readonly INetworkPeer _peer;
         private readonly PlayerId _preferredId;
+        private readonly float _retryTimeoutSeconds;
+        private readonly int _maxRetries;
         private bool _alive = true;
+
+        private int _pendingX;
+        private int _pendingY;
+        private float _pendingSentAt;
+        private int _retryCount;
+        private float _lastSyncRequestAt = -10f;
 
         public PlayerId PlayerId { get; private set; } = PlayerId.None;
         public MatchPhase Phase { get; private set; } = MatchPhase.WaitingForPlayers;
@@ -116,6 +124,7 @@ namespace NavalBattle.Client
         public string StatusText { get; private set; } = "Connecting...";
         public bool HasPendingShot { get; private set; }
         public string PendingRequestId { get; private set; }
+        public int RetryCount => _retryCount;
         public ClientBoardView BoardView { get; } = new();
 
         public event Action StateChanged;
@@ -127,13 +136,20 @@ namespace NavalBattle.Client
             CurrentTurn == PlayerId &&
             !HasPendingShot;
 
-        public GameClient(INetworkPeer peer, PlayerId preferredId)
+        public GameClient(
+            INetworkPeer peer,
+            PlayerId preferredId,
+            float retryTimeoutSeconds = 1f,
+            int maxRetries = 5)
         {
             _peer = peer;
             _preferredId = preferredId;
+            _retryTimeoutSeconds = Mathf.Max(0.1f, retryTimeoutSeconds);
+            _maxRetries = Mathf.Max(0, maxRetries);
             _peer.MessageReceived += OnMessage;
             _peer.Disconnected += OnDisconnected;
             _peer.Connected += OnConnected;
+            _peer.IncomingMessageDropped += OnIncomingDropped;
         }
 
         public void Start()
@@ -152,6 +168,31 @@ namespace NavalBattle.Client
             _peer.MessageReceived -= OnMessage;
             _peer.Disconnected -= OnDisconnected;
             _peer.Connected -= OnConnected;
+            _peer.IncomingMessageDropped -= OnIncomingDropped;
+        }
+
+        public void Tick(float nowSeconds)
+        {
+            if (!_alive || !HasPendingShot || !_peer.IsConnected)
+                return;
+
+            if (_retryCount >= _maxRetries)
+                return;
+
+            if (nowSeconds - _pendingSentAt < _retryTimeoutSeconds)
+                return;
+
+            _retryCount++;
+            _pendingSentAt = nowSeconds;
+            StatusText = $"Retrying shot ({_pendingX},{_pendingY}) #{_retryCount}...";
+            RaiseState();
+
+            Send(MessageType.FireRequest, new FireRequest
+            {
+                RequestId = PendingRequestId,
+                X = _pendingX,
+                Y = _pendingY
+            });
         }
 
         public bool TryFire(int x, int y)
@@ -175,6 +216,10 @@ namespace NavalBattle.Client
             var requestId = Guid.NewGuid().ToString("N");
             HasPendingShot = true;
             PendingRequestId = requestId;
+            _pendingX = x;
+            _pendingY = y;
+            _pendingSentAt = Time.realtimeSinceStartup;
+            _retryCount = 0;
             BoardView.SetOpponentPending(x, y);
             StatusText = $"Shot sent ({x},{y})...";
             RaiseState();
@@ -201,6 +246,40 @@ namespace NavalBattle.Client
             });
         }
 
+        public void RequestSync()
+        {
+            if (!_alive || !_peer.IsConnected || PlayerId == PlayerId.None)
+                return;
+
+            var now = Time.realtimeSinceStartup;
+            if (now - _lastSyncRequestAt < 0.25f)
+                return;
+
+            _lastSyncRequestAt = now;
+            StatusText = "Syncing state...";
+            RaiseState();
+            Send(MessageType.SyncRequest, new SyncRequest
+            {
+                PlayerId = (byte)PlayerId
+            });
+        }
+
+        private void OnIncomingDropped(MessageType type)
+        {
+            if (!_alive)
+                return;
+
+            // Lost ShotResult / MatchFinished / Snapshot leaves this client on a stale turn.
+            if (type is MessageType.ShotResult
+                or MessageType.MatchFinished
+                or MessageType.MatchStarted
+                or MessageType.StateSnapshot
+                or MessageType.FireRejected)
+            {
+                RequestSync();
+            }
+        }
+
         private void OnConnected()
         {
             if (!_alive)
@@ -216,9 +295,7 @@ namespace NavalBattle.Client
             if (!_alive)
                 return;
 
-            HasPendingShot = false;
-            PendingRequestId = null;
-            BoardView.ClearPending();
+            ClearPendingLocal();
             StatusText = "Disconnected";
             RaiseState();
         }
@@ -275,18 +352,15 @@ namespace NavalBattle.Client
             Phase = MatchPhase.Playing;
             BoardView.Reset(msg.BoardSize);
             BoardView.ApplyOwnMarks(msg.YourCells);
-            StatusText = CurrentTurn == PlayerId ? "Your turn" : "Opponent turn";
+            ClearPendingLocal();
+            StatusText = CurrentTurn == PlayerId ? "Your turn" : $"Opponent turn (wait {CurrentTurn})";
             RaiseState();
         }
 
         private void HandleRejected(FireRejectedMessage msg)
         {
             if (msg.RequestId == PendingRequestId)
-            {
-                HasPendingShot = false;
-                PendingRequestId = null;
-                BoardView.ClearPending();
-            }
+                ClearPendingLocal();
 
             StatusText = $"Rejected: {(RejectReason)msg.Reason}";
             RaiseState();
@@ -298,10 +372,7 @@ namespace NavalBattle.Client
             if (shooter == PlayerId)
             {
                 if (msg.RequestId == PendingRequestId)
-                {
-                    HasPendingShot = false;
-                    PendingRequestId = null;
-                }
+                    ClearPendingLocal();
 
                 BoardView.ApplyShotAsShooter(msg);
             }
@@ -319,7 +390,7 @@ namespace NavalBattle.Client
             }
             else
             {
-                StatusText = CurrentTurn == PlayerId ? "Your turn" : "Opponent turn";
+                StatusText = CurrentTurn == PlayerId ? "Your turn" : $"Opponent turn (wait {CurrentTurn})";
             }
 
             RaiseState();
@@ -335,16 +406,27 @@ namespace NavalBattle.Client
             BoardView.ApplyOwnMarks(msg.YourCells);
             BoardView.ApplyFogMarks(msg.OpponentFogCells);
 
-            HasPendingShot = msg.HasPendingShot;
-            PendingRequestId = msg.PendingRequestId;
             if (msg.HasPendingShot)
+            {
+                HasPendingShot = true;
+                PendingRequestId = msg.PendingRequestId;
+                _pendingX = msg.PendingX;
+                _pendingY = msg.PendingY;
+                _pendingSentAt = Time.realtimeSinceStartup;
+                _retryCount = 0;
                 BoardView.SetOpponentPending(msg.PendingX, msg.PendingY);
+            }
+            else
+            {
+                ClearPendingLocal();
+            }
 
             StatusText = Phase switch
             {
                 MatchPhase.Finished => Winner == PlayerId ? "You win!" : "You lose",
                 MatchPhase.PausedDisconnected => "Paused: waiting reconnect",
-                MatchPhase.Playing => CurrentTurn == PlayerId ? "Your turn" : "Opponent turn",
+                MatchPhase.Playing when CurrentTurn == PlayerId => "Your turn",
+                MatchPhase.Playing => $"Opponent turn (wait {CurrentTurn})",
                 _ => "Waiting..."
             };
             RaiseState();
@@ -352,11 +434,14 @@ namespace NavalBattle.Client
 
         private void HandleOpponentConnection(OpponentConnectionChangedMessage msg)
         {
-            StatusText = msg.IsConnected ? "Opponent reconnected" : "Opponent disconnected";
             if (!msg.IsConnected && Phase == MatchPhase.Playing)
                 Phase = MatchPhase.PausedDisconnected;
             if (msg.IsConnected && Phase == MatchPhase.PausedDisconnected)
                 Phase = MatchPhase.Playing;
+
+            StatusText = msg.IsConnected
+                ? (CurrentTurn == PlayerId ? "Your turn" : $"Opponent turn (wait {CurrentTurn})")
+                : "Opponent disconnected";
             RaiseState();
         }
 
@@ -366,6 +451,14 @@ namespace NavalBattle.Client
             Winner = (PlayerId)msg.WinnerPlayerId;
             StatusText = Winner == PlayerId ? "You win!" : "You lose";
             RaiseState();
+        }
+
+        private void ClearPendingLocal()
+        {
+            HasPendingShot = false;
+            PendingRequestId = null;
+            _retryCount = 0;
+            BoardView.ClearPending();
         }
 
         private void Send<T>(MessageType type, T payload)

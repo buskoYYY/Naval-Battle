@@ -92,6 +92,9 @@ namespace NavalBattle.Server
                     case MessageType.ReconnectRequest:
                         HandleReconnect(peerId, MessageSerializer.Unwrap<ReconnectRequest>(envelope));
                         break;
+                    case MessageType.SyncRequest:
+                        HandleSync(peerId);
+                        break;
                     default:
                         Send(peerId, MessageType.Error, new ErrorMessage { Text = $"Unknown type {envelope.Type}" });
                         break;
@@ -157,6 +160,14 @@ namespace NavalBattle.Server
                 _phase = MatchPhase.Playing;
 
             NotifyOpponentConnection(playerId, true);
+            SendSnapshot(binding);
+        }
+
+        private void HandleSync(string peerId)
+        {
+            if (!_byPeer.TryGetValue(peerId, out var binding))
+                return;
+
             SendSnapshot(binding);
         }
 

@@ -7,8 +7,8 @@ namespace NavalBattle.Transport
 {
     /// <summary>
     /// In-process transport: ordered delivery while connected.
-    /// Each peer has its own receive LatencyMs (S->C). C->S is immediate
-    /// so a slow client does not stall the fast client's updates.
+    /// Each peer has receive LatencyMs (S->C). C->S is immediate.
+    /// DropNextOutgoing / DropNextIncoming simulate message loss for retry demos.
     /// Disconnect drops in-flight messages for that peer.
     /// </summary>
     public sealed class InProcessTransportHub : ITransportHub
@@ -38,6 +38,8 @@ namespace NavalBattle.Transport
 
             public string PeerId { get; }
             public bool IsConnected { get; set; }
+            public int DropNextOutgoing { get; set; }
+            public int DropNextIncoming { get; set; }
 
             public float LatencyMs
             {
@@ -48,6 +50,7 @@ namespace NavalBattle.Transport
             public event Action<NetworkEnvelope> MessageReceived;
             public event Action Disconnected;
             public event Action Connected;
+            public event Action<MessageType> IncomingMessageDropped;
 
             public void Send(NetworkEnvelope envelope)
             {
@@ -66,6 +69,8 @@ namespace NavalBattle.Transport
             public void RaiseDisconnected() => Disconnected?.Invoke();
 
             public void RaiseConnected() => Connected?.Invoke();
+
+            public void RaiseIncomingDropped(MessageType type) => IncomingMessageDropped?.Invoke(type);
         }
 
         private readonly List<PendingMessage> _queue = new();
@@ -104,6 +109,14 @@ namespace NavalBattle.Transport
 
             if (envelope.Seq <= 0)
                 envelope.Seq = _nextSeq++;
+
+            if (peer.DropNextIncoming > 0)
+            {
+                peer.DropNextIncoming--;
+                WriteLog($"[DROP S->C] {peerId} {envelope.Type} seq={envelope.Seq} (remaining drops={peer.DropNextIncoming})");
+                peer.RaiseIncomingDropped(envelope.Type);
+                return;
+            }
 
             Enqueue(new PendingMessage
             {
@@ -190,13 +203,18 @@ namespace NavalBattle.Transport
             if (envelope.Seq <= 0)
                 envelope.Seq = _nextSeq++;
 
+            if (peer.DropNextOutgoing > 0)
+            {
+                peer.DropNextOutgoing--;
+                WriteLog($"[DROP C->S] {fromPeerId} {envelope.Type} seq={envelope.Seq} (remaining drops={peer.DropNextOutgoing})");
+                return;
+            }
+
             Enqueue(new PendingMessage
             {
                 ToServer = true,
                 FromPeerId = fromPeerId,
                 Envelope = envelope,
-                // Upload is not delayed: otherwise the shooter's latency stalls BOTH
-                // clients until FireRequest arrives, which looks like a shared delay.
                 DelayMs = 0f,
                 PeerIdForLog = fromPeerId,
                 DeliverAt = Time.realtimeSinceStartup

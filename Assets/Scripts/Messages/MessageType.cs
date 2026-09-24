@@ -6,6 +6,7 @@ namespace NavalBattle.Messages
         JoinRequest = 1,
         FireRequest = 2,
         ReconnectRequest = 3,
+        SyncRequest = 4,
 
         // Server -> Client
         Welcome = 50,

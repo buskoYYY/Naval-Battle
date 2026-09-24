@@ -127,6 +127,36 @@ namespace NavalBattle.Tests
         }
 
         [Test]
+        public void Fire_RetryAfterLostResult_DoesNotAdvanceTurnTwice()
+        {
+            JoinBoth();
+            // Simulates: first FireRequest applied, ShotResult "lost", client resends same id.
+            _transport.DeliverFromClient("c1", MessageType.FireRequest, new FireRequest
+            {
+                RequestId = "lost-result",
+                X = 3,
+                Y = 3
+            });
+
+            var first = _transport.LastPayloadTo<ShotResultMessage>("c1", MessageType.ShotResult);
+            Assert.AreEqual((byte)PlayerId.Player2, first.NextTurnPlayerId);
+            var resultsToC2 = _transport.CountTo("c2", MessageType.ShotResult);
+
+            _transport.DeliverFromClient("c1", MessageType.FireRequest, new FireRequest
+            {
+                RequestId = "lost-result",
+                X = 3,
+                Y = 3
+            });
+
+            var replay = _transport.LastPayloadTo<ShotResultMessage>("c1", MessageType.ShotResult);
+            Assert.AreEqual(first.NextTurnPlayerId, replay.NextTurnPlayerId);
+            Assert.AreEqual(first.Outcome, replay.Outcome);
+            Assert.AreEqual(resultsToC2, _transport.CountTo("c2", MessageType.ShotResult),
+                "Opponent must not get a second ShotResult for a retried requestId");
+        }
+
+        [Test]
         public void Fire_SameCellNewRequest_AfterTurnPass_RejectedAsAlreadyShot()
         {
             JoinBoth();

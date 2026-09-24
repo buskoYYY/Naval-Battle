@@ -14,6 +14,9 @@ namespace NavalBattle.UI
         [SerializeField] private BoardGridView _enemyBoard;
         [SerializeField] private Button _disconnectButton;
         [SerializeField] private Button _connectButton;
+        [SerializeField] private Button _dropUploadButton;
+        [SerializeField] private Button _dropDownloadButton;
+        [SerializeField] private Button _syncButton;
         [SerializeField] private Slider _latencySlider;
         [SerializeField] private Text _latencyValueLabel;
 
@@ -35,6 +38,23 @@ namespace NavalBattle.UI
                 _peer.Connect();
                 _client.RequestReconnect();
             });
+
+            if (_dropUploadButton != null)
+                _dropUploadButton.onClick.AddListener(() =>
+                {
+                    _peer.DropNextOutgoing++;
+                    Refresh();
+                });
+
+            if (_dropDownloadButton != null)
+                _dropDownloadButton.onClick.AddListener(() =>
+                {
+                    _peer.DropNextIncoming++;
+                    Refresh();
+                });
+
+            if (_syncButton != null)
+                _syncButton.onClick.AddListener(() => _client.RequestSync());
 
             if (_latencySlider != null)
             {
@@ -84,10 +104,19 @@ namespace NavalBattle.UI
 
             if (_status != null)
             {
-                var pending = _client.HasPendingShot
-                    ? $"  |  waiting reply (~{_peer.LatencyMs:0} ms)"
-                    : string.Empty;
-                _status.text = _client.StatusText + pending;
+                var pending = string.Empty;
+                if (_client.HasPendingShot)
+                {
+                    pending = _client.RetryCount > 0
+                        ? $"  |  retry #{_client.RetryCount}"
+                        : "  |  waiting reply";
+                }
+
+                var drops = string.Empty;
+                if (_peer.DropNextOutgoing > 0 || _peer.DropNextIncoming > 0)
+                    drops = $"  |  drop↑{_peer.DropNextOutgoing} ↓{_peer.DropNextIncoming}";
+
+                _status.text = _client.StatusText + pending + drops;
             }
 
             UpdateLatencyLabel(_peer.LatencyMs);
@@ -149,6 +178,13 @@ namespace NavalBattle.UI
 
             _disconnectButton = CreateButton(buttons.transform, "Disconnect");
             _connectButton = CreateButton(buttons.transform, "Connect");
+
+            var dropRow = new GameObject("DropButtons", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+            dropRow.transform.SetParent(transform, false);
+            dropRow.GetComponent<HorizontalLayoutGroup>().spacing = 6;
+            _dropUploadButton = CreateButton(dropRow.transform, "Drop next ↑");
+            _dropDownloadButton = CreateButton(dropRow.transform, "Drop next ↓");
+            _syncButton = CreateButton(dropRow.transform, "Sync");
 
             _latencyValueLabel = CreateText(transform, "Receive delay: 200 ms", 12);
             _latencySlider = CreateSlider(transform);

@@ -58,8 +58,16 @@ namespace NavalBattle.Bootstrap
             peer1.Connected += () => _server.NotifyPeerConnected("client-1");
             peer2.Connected += () => _server.NotifyPeerConnected("client-2");
 
-            _client1 = new GameClient(peer1, PlayerId.Player1);
-            _client2 = new GameClient(peer2, PlayerId.Player2);
+            _client1 = new GameClient(
+                peer1,
+                PlayerId.Player1,
+                _config.FireRetryTimeoutSeconds,
+                _config.MaxFireRetries);
+            _client2 = new GameClient(
+                peer2,
+                PlayerId.Player2,
+                _config.FireRetryTimeoutSeconds,
+                _config.MaxFireRetries);
 
             BuildUi();
             _panel1.Bind(_client1, peer1, "Player 1", _config.MaxLatencyMs);
@@ -72,7 +80,10 @@ namespace NavalBattle.Bootstrap
 
         private void Update()
         {
-            _transport?.Tick(Time.realtimeSinceStartup);
+            var now = Time.realtimeSinceStartup;
+            _transport?.Tick(now);
+            _client1?.Tick(now);
+            _client2?.Tick(now);
         }
 
         private void OnDestroy()

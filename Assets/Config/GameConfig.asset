@@ -19,3 +19,6 @@ MonoBehaviour:
   MaxLatencyMs: 10000
   DisconnectForfeitSeconds: 0
   TurnTimeoutSeconds: 0
+  FirstTurnPlayerId: 0
+  FireRetryTimeoutSeconds: 1
+  MaxFireRetries: 5
