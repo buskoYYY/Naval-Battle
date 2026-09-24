@@ -165,7 +165,9 @@ namespace NavalBattle.Server
             if (!_byPeer.TryGetValue(peerId, out var shooter))
                 return;
 
-            if (_phase != MatchPhase.Playing)
+            // Allow fire while opponent is disconnected: with latency the request may arrive
+            // after Pause. Rejecting it would roll the turn back to the shooter incorrectly.
+            if (_phase is MatchPhase.Finished or MatchPhase.WaitingForPlayers)
             {
                 Reject(shooter, request.RequestId, RejectReason.GameNotRunning);
                 return;
@@ -187,6 +189,12 @@ namespace NavalBattle.Server
             if (shooter.PlayerId != _currentTurn)
             {
                 Reject(shooter, request.RequestId, RejectReason.NotYourTurn);
+                return;
+            }
+
+            if (!shooter.Connected)
+            {
+                Reject(shooter, request.RequestId, RejectReason.NotConnected);
                 return;
             }
 
@@ -223,6 +231,9 @@ namespace NavalBattle.Server
             else
             {
                 _currentTurn = target.PlayerId;
+                _phase = AllPlayersConnected()
+                    ? MatchPhase.Playing
+                    : MatchPhase.PausedDisconnected;
             }
 
             var result = new ShotResultMessage
