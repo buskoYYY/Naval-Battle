@@ -20,7 +20,7 @@ namespace NavalBattle.Config
         public float DefaultLatencyMs = 200f;
 
         [Min(0f)]
-        public float MaxLatencyMs = 5000f;
+        public float MaxLatencyMs = 10000f;
 
         [Header("Match")]
         [Tooltip("If a player stays disconnected longer than this, opponent wins. 0 = pause forever.")]

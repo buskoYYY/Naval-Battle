@@ -14,17 +14,18 @@ namespace NavalBattle.UI
         [SerializeField] private BoardGridView _enemyBoard;
         [SerializeField] private Button _disconnectButton;
         [SerializeField] private Button _connectButton;
-        [SerializeField] private InputField _latencyField;
+        [SerializeField] private Slider _latencySlider;
+        [SerializeField] private Text _latencyValueLabel;
 
         private GameClient _client;
         private INetworkPeer _peer;
-        private InProcessTransportHub _hub;
+        private float _maxLatencyMs = 10000f;
 
-        public void Bind(GameClient client, INetworkPeer peer, InProcessTransportHub hub, string title)
+        public void Bind(GameClient client, INetworkPeer peer, string title, float maxLatencyMs = 10000f)
         {
             _client = client;
             _peer = peer;
-            _hub = hub;
+            _maxLatencyMs = Mathf.Max(100f, maxLatencyMs);
 
             EnsureUi(title);
             _client.StateChanged += Refresh;
@@ -35,14 +36,14 @@ namespace NavalBattle.UI
                 _client.RequestReconnect();
             });
 
-            if (_latencyField != null)
+            if (_latencySlider != null)
             {
-                _latencyField.text = hub.LatencyMs.ToString("0");
-                _latencyField.onEndEdit.AddListener(value =>
-                {
-                    if (float.TryParse(value, out var ms))
-                        _hub.LatencyMs = Mathf.Clamp(ms, 0f, 10000f);
-                });
+                _latencySlider.minValue = 0f;
+                _latencySlider.maxValue = _maxLatencyMs;
+                _latencySlider.wholeNumbers = true;
+                _latencySlider.SetValueWithoutNotify(_peer.LatencyMs);
+                _latencySlider.onValueChanged.AddListener(OnLatencySliderChanged);
+                UpdateLatencyLabel(_peer.LatencyMs);
             }
 
             Refresh();
@@ -52,6 +53,25 @@ namespace NavalBattle.UI
         {
             if (_client != null)
                 _client.StateChanged -= Refresh;
+
+            if (_latencySlider != null)
+                _latencySlider.onValueChanged.RemoveListener(OnLatencySliderChanged);
+        }
+
+        private void OnLatencySliderChanged(float ms)
+        {
+            if (_peer == null)
+                return;
+
+            _peer.LatencyMs = Mathf.Clamp(ms, 0f, _maxLatencyMs);
+            UpdateLatencyLabel(_peer.LatencyMs);
+            Refresh();
+        }
+
+        private void UpdateLatencyLabel(float ms)
+        {
+            if (_latencyValueLabel != null)
+                _latencyValueLabel.text = $"Receive delay: {ms:0} ms";
         }
 
         private void Refresh()
@@ -63,7 +83,14 @@ namespace NavalBattle.UI
                 _title.text = $"{_client.PlayerId}";
 
             if (_status != null)
-                _status.text = _client.StatusText;
+            {
+                var pending = _client.HasPendingShot
+                    ? $"  |  waiting reply (~{_peer.LatencyMs:0} ms)"
+                    : string.Empty;
+                _status.text = _client.StatusText + pending;
+            }
+
+            UpdateLatencyLabel(_peer.LatencyMs);
 
             var size = Mathf.Max(1, _client.BoardView.Size);
             if (_ownBoard != null)
@@ -123,8 +150,8 @@ namespace NavalBattle.UI
             _disconnectButton = CreateButton(buttons.transform, "Disconnect");
             _connectButton = CreateButton(buttons.transform, "Connect");
 
-            CreateText(transform, "Latency ms", 12);
-            _latencyField = CreateInput(transform, "200");
+            _latencyValueLabel = CreateText(transform, "Receive delay: 200 ms", 12);
+            _latencySlider = CreateSlider(transform);
         }
 
         private BoardGridView CreateBoard(string name)
@@ -135,6 +162,56 @@ namespace NavalBattle.UI
             le.minHeight = 230;
             le.preferredHeight = 230;
             return go.GetComponent<BoardGridView>();
+        }
+
+        private static Slider CreateSlider(Transform parent)
+        {
+            var root = new GameObject("LatencySlider", typeof(RectTransform), typeof(Slider), typeof(LayoutElement));
+            root.transform.SetParent(parent, false);
+            root.GetComponent<LayoutElement>().preferredHeight = 24;
+            root.GetComponent<LayoutElement>().flexibleWidth = 1;
+
+            var bg = new GameObject("Background", typeof(RectTransform), typeof(Image));
+            bg.transform.SetParent(root.transform, false);
+            Stretch(bg.GetComponent<RectTransform>());
+            bg.GetComponent<Image>().color = new Color(0.25f, 0.25f, 0.3f);
+
+            var fillArea = new GameObject("Fill Area", typeof(RectTransform));
+            fillArea.transform.SetParent(root.transform, false);
+            var fillAreaRt = fillArea.GetComponent<RectTransform>();
+            Stretch(fillAreaRt);
+            fillAreaRt.offsetMin = new Vector2(5, 6);
+            fillAreaRt.offsetMax = new Vector2(-5, -6);
+
+            var fill = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+            fill.transform.SetParent(fillArea.transform, false);
+            Stretch(fill.GetComponent<RectTransform>());
+            fill.GetComponent<Image>().color = new Color(0.3f, 0.65f, 0.95f);
+
+            var handleArea = new GameObject("Handle Slide Area", typeof(RectTransform));
+            handleArea.transform.SetParent(root.transform, false);
+            Stretch(handleArea.GetComponent<RectTransform>());
+
+            var handle = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handle.transform.SetParent(handleArea.transform, false);
+            var handleRt = handle.GetComponent<RectTransform>();
+            handleRt.sizeDelta = new Vector2(16, 0);
+            handle.GetComponent<Image>().color = Color.white;
+
+            var slider = root.GetComponent<Slider>();
+            slider.targetGraphic = handle.GetComponent<Image>();
+            slider.fillRect = fill.GetComponent<RectTransform>();
+            slider.handleRect = handleRt;
+            slider.direction = Slider.Direction.LeftToRight;
+            return slider;
+        }
+
+        private static void Stretch(RectTransform rt)
+        {
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
         }
 
         private static Text CreateText(Transform parent, string value, int size)
@@ -165,37 +242,8 @@ namespace NavalBattle.UI
             text.alignment = TextAnchor.MiddleCenter;
             text.color = Color.white;
             text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            var rt = text.GetComponent<RectTransform>();
-            rt.anchorMin = Vector2.zero;
-            rt.anchorMax = Vector2.one;
-            rt.offsetMin = Vector2.zero;
-            rt.offsetMax = Vector2.zero;
+            Stretch(text.GetComponent<RectTransform>());
             return go.GetComponent<Button>();
-        }
-
-        private static InputField CreateInput(Transform parent, string value)
-        {
-            var go = new GameObject("Input", typeof(RectTransform), typeof(Image), typeof(InputField), typeof(LayoutElement));
-            go.transform.SetParent(parent, false);
-            go.GetComponent<Image>().color = Color.white;
-            go.GetComponent<LayoutElement>().preferredHeight = 28;
-
-            var textGo = new GameObject("Text", typeof(RectTransform), typeof(Text));
-            textGo.transform.SetParent(go.transform, false);
-            var text = textGo.GetComponent<Text>();
-            text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            text.color = Color.black;
-            text.supportRichText = false;
-            var rt = text.GetComponent<RectTransform>();
-            rt.anchorMin = Vector2.zero;
-            rt.anchorMax = Vector2.one;
-            rt.offsetMin = new Vector2(6, 0);
-            rt.offsetMax = new Vector2(-6, 0);
-
-            var input = go.GetComponent<InputField>();
-            input.textComponent = text;
-            input.text = value;
-            return input;
         }
     }
 }

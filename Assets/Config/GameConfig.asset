@@ -16,6 +16,6 @@ MonoBehaviour:
   ShipLengths: 03000000020000000200000001000000
   ForbidOrthogonalTouch: 1
   DefaultLatencyMs: 200
-  MaxLatencyMs: 5000
+  MaxLatencyMs: 10000
   DisconnectForfeitSeconds: 0
   TurnTimeoutSeconds: 0

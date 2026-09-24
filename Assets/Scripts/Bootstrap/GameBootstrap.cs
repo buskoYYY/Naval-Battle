@@ -44,14 +44,14 @@ namespace NavalBattle.Bootstrap
 
             _transport = new InProcessTransportHub
             {
-                LatencyMs = _config.DefaultLatencyMs,
+                DefaultLatencyMs = _config.DefaultLatencyMs,
                 LogEnabled = true
             };
 
             _server = new GameServer(_config, _transport);
 
-            var peer1 = _transport.CreateClientPeer("client-1");
-            var peer2 = _transport.CreateClientPeer("client-2");
+            var peer1 = _transport.CreateClientPeer("client-1", _config.DefaultLatencyMs);
+            var peer2 = _transport.CreateClientPeer("client-2", _config.DefaultLatencyMs);
 
             peer1.Disconnected += () => _server.NotifyPeerDisconnected("client-1");
             peer2.Disconnected += () => _server.NotifyPeerDisconnected("client-2");
@@ -62,8 +62,8 @@ namespace NavalBattle.Bootstrap
             _client2 = new GameClient(peer2, PlayerId.Player2);
 
             BuildUi();
-            _panel1.Bind(_client1, peer1, _transport, "Player 1");
-            _panel2.Bind(_client2, peer2, _transport, "Player 2");
+            _panel1.Bind(_client1, peer1, "Player 1", _config.MaxLatencyMs);
+            _panel2.Bind(_client2, peer2, "Player 2", _config.MaxLatencyMs);
             _debug.Bind(_transport);
 
             _client1.Start();

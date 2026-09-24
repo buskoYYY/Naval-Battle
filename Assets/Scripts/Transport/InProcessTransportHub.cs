@@ -6,7 +6,9 @@ using UnityEngine;
 namespace NavalBattle.Transport
 {
     /// <summary>
-    /// In-process transport: ordered delivery while connected, delayed by LatencyMs.
+    /// In-process transport: ordered delivery while connected.
+    /// Each peer has its own receive LatencyMs (S->C). C->S is immediate
+    /// so a slow client does not stall the fast client's updates.
     /// Disconnect drops in-flight messages for that peer.
     /// </summary>
     public sealed class InProcessTransportHub : ITransportHub
@@ -18,20 +20,31 @@ namespace NavalBattle.Transport
             public string FromPeerId;
             public NetworkEnvelope Envelope;
             public float DeliverAt;
+            public float DelayMs;
+            public string PeerIdForLog;
         }
 
         private sealed class ClientPeer : INetworkPeer
         {
             private readonly InProcessTransportHub _hub;
+            private float _latencyMs;
 
-            public ClientPeer(InProcessTransportHub hub, string peerId)
+            public ClientPeer(InProcessTransportHub hub, string peerId, float latencyMs)
             {
                 _hub = hub;
                 PeerId = peerId;
+                _latencyMs = Mathf.Max(0f, latencyMs);
             }
 
             public string PeerId { get; }
             public bool IsConnected { get; set; }
+
+            public float LatencyMs
+            {
+                get => _latencyMs;
+                set => _latencyMs = Mathf.Max(0f, value);
+            }
+
             public event Action<NetworkEnvelope> MessageReceived;
             public event Action Disconnected;
             public event Action Connected;
@@ -61,17 +74,20 @@ namespace NavalBattle.Transport
         private bool _alive = true;
         private int _nextSeq = 1;
 
-        public float LatencyMs { get; set; }
+        public float DefaultLatencyMs { get; set; }
         public bool LogEnabled { get; set; } = true;
 
         public event Action<string> LogLine;
 
-        public INetworkPeer CreateClientPeer(string peerId)
+        public INetworkPeer CreateClientPeer(string peerId, float? latencyMs = null)
         {
             if (_peers.ContainsKey(peerId))
                 throw new InvalidOperationException($"Peer '{peerId}' already exists.");
 
-            var peer = new ClientPeer(this, peerId) { IsConnected = true };
+            var peer = new ClientPeer(this, peerId, latencyMs ?? DefaultLatencyMs)
+            {
+                IsConnected = true
+            };
             _peers[peerId] = peer;
             return peer;
         }
@@ -94,10 +110,12 @@ namespace NavalBattle.Transport
                 TargetPeerId = peerId,
                 ToServer = false,
                 Envelope = envelope,
-                DeliverAt = Time.realtimeSinceStartup + LatencyMs / 1000f
+                DelayMs = peer.LatencyMs,
+                PeerIdForLog = peerId,
+                DeliverAt = Time.realtimeSinceStartup + peer.LatencyMs / 1000f
             });
 
-            WriteLog(MessageSerializer.ToLogLine("S->C", peerId, envelope));
+            WriteLog($"[queue +{peer.LatencyMs:0}ms] {MessageSerializer.ToLogLine("S->C", peerId, envelope)}");
         }
 
         public void DisconnectPeer(string peerId)
@@ -166,7 +184,7 @@ namespace NavalBattle.Transport
 
         private void EnqueueToServer(string fromPeerId, NetworkEnvelope envelope)
         {
-            if (!_alive)
+            if (!_alive || !_peers.TryGetValue(fromPeerId, out var peer))
                 return;
 
             if (envelope.Seq <= 0)
@@ -177,10 +195,14 @@ namespace NavalBattle.Transport
                 ToServer = true,
                 FromPeerId = fromPeerId,
                 Envelope = envelope,
-                DeliverAt = Time.realtimeSinceStartup + LatencyMs / 1000f
+                // Upload is not delayed: otherwise the shooter's latency stalls BOTH
+                // clients until FireRequest arrives, which looks like a shared delay.
+                DelayMs = 0f,
+                PeerIdForLog = fromPeerId,
+                DeliverAt = Time.realtimeSinceStartup
             });
 
-            WriteLog(MessageSerializer.ToLogLine("C->S", fromPeerId, envelope));
+            WriteLog($"[queue +0ms upload] {MessageSerializer.ToLogLine("C->S", fromPeerId, envelope)}");
         }
 
         private void Enqueue(PendingMessage message) => _queue.Add(message);
@@ -195,6 +217,7 @@ namespace NavalBattle.Transport
                 if (!_peers.TryGetValue(message.FromPeerId, out var peer) || !peer.IsConnected)
                     return;
 
+                WriteLog($"[deliver after {message.DelayMs:0}ms] {MessageSerializer.ToLogLine("C->S", message.PeerIdForLog, message.Envelope)}");
                 _serverHandler?.Invoke(message.FromPeerId, message.Envelope);
                 return;
             }
@@ -202,6 +225,7 @@ namespace NavalBattle.Transport
             if (!_peers.TryGetValue(message.TargetPeerId, out var target) || !target.IsConnected)
                 return;
 
+            WriteLog($"[deliver after {message.DelayMs:0}ms] {MessageSerializer.ToLogLine("S->C", message.PeerIdForLog, message.Envelope)}");
             target.RaiseMessage(message.Envelope);
         }
 
