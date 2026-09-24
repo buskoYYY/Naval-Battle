@@ -26,7 +26,11 @@ namespace NavalBattle.Messages
 
         public static string ToLogLine(string direction, string endpointId, NetworkEnvelope envelope)
         {
-            return $"[{DateTime.Now:HH:mm:ss.fff}] {direction} {endpointId} seq={envelope.Seq} {envelope.Type} {envelope.PayloadJson}";
+            var payload = envelope.PayloadJson ?? string.Empty;
+            if (payload.Length > 90)
+                payload = payload.Substring(0, 87) + "...";
+
+            return $"[{DateTime.Now:HH:mm:ss}] {direction} {endpointId} #{envelope.Seq} {envelope.Type} {payload}";
         }
     }
 }
