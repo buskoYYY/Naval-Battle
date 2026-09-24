@@ -31,6 +31,10 @@ namespace NavalBattle.Config
         [Min(0f)]
         public float TurnTimeoutSeconds = 0f;
 
+        [Tooltip("0 = random first player, 1 = Player1, 2 = Player2. Useful for tests.")]
+        [Range(0, 2)]
+        public int FirstTurnPlayerId = 0;
+
         public void ValidateOrThrow()
         {
             if (BoardSize < 1)

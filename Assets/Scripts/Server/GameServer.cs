@@ -271,7 +271,7 @@ namespace NavalBattle.Server
             foreach (var binding in _byPlayer.Values)
                 binding.Board = ShipPlacer.CreateRandomBoard(_config);
 
-            _currentTurn = UnityEngine.Random.value < 0.5f ? PlayerId.Player1 : PlayerId.Player2;
+            _currentTurn = ResolveFirstTurn();
             _phase = MatchPhase.Playing;
             _winner = PlayerId.None;
 
@@ -333,6 +333,15 @@ namespace NavalBattle.Server
                 OpponentPlayerId = (byte)playerId,
                 IsConnected = isConnected
             });
+        }
+
+        private PlayerId ResolveFirstTurn()
+        {
+            if (_config.FirstTurnPlayerId == (int)PlayerId.Player1)
+                return PlayerId.Player1;
+            if (_config.FirstTurnPlayerId == (int)PlayerId.Player2)
+                return PlayerId.Player2;
+            return UnityEngine.Random.value < 0.5f ? PlayerId.Player1 : PlayerId.Player2;
         }
 
         private PlayerBinding OpponentOf(PlayerId playerId)
